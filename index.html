@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <title>Attendance Processor (Offline)</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Dynamic @page (updated from JS for portrait/landscape) -->
+  <style id="pageStyle">
+    @page { size: A4 portrait; margin: 12mm; }
+  </style>
+</head>
+
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">⏱️</div>
+    <div>
+      <h1>معالج الحضور والانصراف</h1>
+      <div class="sub">يعمل بدون إنترنت • لصق → تنظيف → تقارير → طباعة/PDF</div>
+    </div>
+  </div>
+
+  <div class="topActions noPrint">
+    <button id="btnTheme" class="ghost" title="تبديل الوضع">🌙</button>
+    <button id="btnPrint" class="primary" title="طباعة / حفظ PDF">Print / PDF</button>
+  </div>
+</header>
+
+<main>
+  <!-- ✅ Print header (ONLY for printing) -->
+  <section id="printHeader" class="printOnly">
+    <div class="phTop">
+      <div>
+        <div class="phCompany" id="phCompany">Attendance Report</div>
+        <div class="phMeta">
+          <span id="phReportTitle">—</span>
+          <span class="dot">•</span>
+          <span id="phRange">—</span>
+        </div>
+      </div>
+      <div class="phRight">
+        <div><b>Generated:</b> <span id="phGen">—</span></div>
+        <div><b>Employee:</b> <span id="phEmp">—</span></div>
+      </div>
+    </div>
+
+    <div class="phBottom">
+      <div><b>Prepared by:</b> <span id="phPrepared">—</span></div>
+      <div><b>Approved by:</b> <span id="phApproved">—</span></div>
+      <div><b>Notes:</b> <span id="phNotes">—</span></div>
+    </div>
+  </section>
+
+  <div class="layout">
+    <!-- LEFT: INPUT (hidden on print) -->
+    <section class="card noPrint">
+      <div class="cardHead">
+        <div>
+          <div class="cardTitle">1) إدخال البيانات</div>
+          <div class="cardSub">الصق البيانات الخام كما هي (TAB مثل Excel أو مسافات)</div>
+        </div>
+
+        <div class="cardHeadActions">
+          <button class="primary" id="btnProcess">Process</button>
+          <button class="danger" id="btnClear">Clear</button>
+        </div>
+      </div>
+
+      <textarea id="raw" placeholder="مثال:
+7\tareef\tNot Set1\t01/12/2025 01:04:17\t1
+8\tsifat\tNot Set1\t01/12/2025 01:04:28\t1
+..."></textarea>
+
+      <div class="controls">
+        <div class="pill">
+          سماحية التأخير
+          <input id="grace" type="number" min="0" step="1" value="15">
+          <span>دقيقة</span>
+        </div>
+
+        <div class="pill">
+          بصمات بعد منتصف الليل تُنسب لليوم السابق إذا الوقت &lt;
+          <input id="rollHour" type="number" min="0" max="23" step="1" value="6">
+          <span>:00</span>
+        </div>
+
+        <!-- ✅ pushed far left -->
+        <div class="pill pushLeft" title="البصمات التي تتكرر خلال أقل من (N) ثانية سيتم تجاهلها">
+          حذف تكرار أقل من
+          <input id="dedup" type="number" min="0" step="1" value="60">
+          <span>ثانية</span>
+        </div>
+      </div>
+
+      <div class="hint">
+        <b>مدعوم:</b>
+        • 5 أعمدة: <code>ID  Name  Dept  DateTime  DeviceID</code>
+        • 6 أعمدة: <code>ID  Name  Dept  Date  Time  DeviceID</code>
+        • يدعم <code>ص/م</code>.
+      </div>
+
+      <div class="status" id="status"></div>
+
+      <div class="kpi" id="kpi" style="display:none;">
+        <div class="k"><div class="l">Raw rows</div><div class="n" id="kRaw">0</div></div>
+        <div class="k"><div class="l">After clean</div><div class="n" id="kClean">0</div></div>
+        <div class="k"><div class="l">Daily rows</div><div class="n" id="kDaily">0</div></div>
+        <div class="k"><div class="l">Employees</div><div class="n" id="kEmp">0</div></div>
+      </div>
+    </section>
+
+    <!-- RIGHT: REPORTS -->
+    <section class="card">
+      <div class="cardHead">
+        <div>
+          <div class="cardTitle">2) التقارير</div>
+          <div class="cardSub">اختر الشهر/الموظف ثم اطبع أو صدّر TSV لفتحها في Excel</div>
+        </div>
+
+        <div class="toolsRow">
+          <button id="btnExportPunches" class="ghost">TSV Punches</button>
+          <button id="btnExportDaily" class="ghost">TSV Daily</button>
+          <button id="btnExportSummary" class="ghost">TSV Summary</button>
+          <button id="btnXlsxSummary" class="ghost">XLSX Summary</button>
+          <button id="btnXlsxDaily" class="ghost">XLSX Daily</button>
+          <button id="btnXlsxPunches" class="ghost">XLSX Punches</button>
+          <button id="btnXlsxEmployee" class="ghost">XLSX Employee</button>
+        </div>
+      </div>
+
+      <!-- ✅ Print options -->
+      <details class="drop noPrint" open>
+        <summary>خيارات الطباعة / PDF</summary>
+        <div class="dropBody">
+          <div class="formGrid3">
+            <label>اتجاه الصفحة
+              <select id="printOrientation">
+                <option value="portrait">عمودي (Portrait)</option>
+                <option value="landscape">أفقي (Landscape)</option>
+              </select>
+            </label>
+
+            <label>ماذا تريد طباعته؟
+              <select id="printWhat">
+                <option value="current">التبويب الحالي</option>
+                <option value="punches">جدول البصمات (Cleaned Punches)</option>
+                <option value="daily">الدوام اليومي (Daily Attendance)</option>
+                <option value="summary">ملخص شهري (Monthly Summary)</option>
+                <option value="emp">تقرير موظف (Employee Report)</option>
+              </select>
+            </label>
+
+            <label>تحسين الملاءمة للطباعة
+              <select id="printFit">
+                <option value="normal">عادي</option>
+                <option value="compact">مضغوط (خط أصغر)</option>
+                <option value="wide">أعمدة أوسع (أفضل للأفقي)</option>
+              </select>
+            </label>
+          
+          <div class="hr"></div>
+
+          <div class="hint"><b>Daily Attendance:</b> اختر الأعمدة التي تريد إخفاءها في الطباعة (ينطبق أيضاً على Employee Daily).</div>
+
+          <div class="colPicker">
+            <div class="colPickerHead">
+              <div class="colPickerTitle">إخفاء أعمدة (Daily)</div>
+              <div class="colPickerBtns">
+                <button type="button" class="ghost" id="btnDailyMinimal">Minimal</button>
+                <button type="button" class="ghost" id="btnDailyReset">Reset</button>
+              </div>
+            </div>
+
+            <div class="colGrid" id="dailyColGrid">
+              <!-- JS fills checkboxes -->
+            </div>
+          </div>
+</div>
+
+          <div class="formGrid3" style="margin-top:10px;">
+            <label>اسم المنشأة/الفرع
+              <input id="hdrCompany" placeholder="مثال: شركة ... / فرع ..." value="Attendance Report">
+            </label>
+            <label>Prepared by
+              <input id="hdrPrepared" placeholder="الاسم">
+            </label>
+            <label>Approved by
+              <input id="hdrApproved" placeholder="الاسم">
+            </label>
+          </div>
+
+          <div class="formGrid3" style="margin-top:10px;">
+            <label style="grid-column: 1 / -1;">Notes
+              <input id="hdrNotes" placeholder="ملاحظات">
+            </label>
+          </div>
+
+          <div class="hint">
+            • زر <b>Print / PDF</b> سيفتح نافذة الطباعة. اختر “Save as PDF” لإخراج PDF.<br>
+            • في الطباعة لن يظهر قسم إدخال البيانات ولا إعدادات الدوام.
+          </div>
+        </div>
+      </details>
+
+      <!-- ✅ Schedule editor -->
+      <details class="drop noPrint">
+        <summary>تعديل أوقات الدوام (قائمة كاملة لكل المعرفات)</summary>
+        <div class="dropBody">
+          <div class="hint">
+            • بعد الضغط على <b>Process</b> سيتم إنشاء جدول من <b>1</b> إلى <b>آخر معرف</b> تلقائيًا.<br>
+            • الموظف ID=1 يعتبر <b>Manager</b> (لا تُطبق عليه أحكام التأخير/الإضافي/الغياب).<br>
+            • إذا بصم الموظف <b>مرة واحدة</b> يتم اعتباره حاضر ولكن <b>غير منتظم</b>.
+          </div>
+
+          <div class="row" style="margin-top:10px;">
+            <button id="btnApplySchedule" class="primary">Apply Schedule + Recalculate</button>
+            <button id="btnExportSchedule" class="ghost">Export Schedule (TSV)</button>
+            <input id="importScheduleFile" type="file" accept=".tsv,.txt,.csv" style="display:none">
+            <button id="btnImportSchedule" class="ghost">Import Schedule (TSV)</button>
+          </div>
+
+          <div class="tablewrap scheduleWrap" style="margin-top:10px;">
+            <table id="tblSchedule"></table>
+          </div>
+        </div>
+      </details>
+
+      <!-- Filters + KPIs -->
+      <div class="filters noPrint">
+        <div class="pill">
+          فلترة الشهر
+          <select id="monthFilter">
+            <option value="ALL">كل البيانات</option>
+          </select>
+        </div>
+
+        <div class="pill">
+          اختر الموظف
+          <select id="employeeFilter">
+            <option value="ALL">كل الموظفين</option>
+          </select>
+        </div>
+
+        <div class="pill bestOnly">
+          أفضل موظف: <b id="bestEmp">—</b>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs noPrint">
+        <div class="tab active" data-tab="punches">Cleaned Punches</div>
+        <div class="tab" data-tab="daily">Daily Attendance</div>
+        <div class="tab" data-tab="summary">Monthly Summary</div>
+        <div class="tab" data-tab="emp">Employee Report</div>
+      </div>
+
+      <!-- Views -->
+      <div id="viewPunches" class="view">
+        <div class="tablewrap"><table id="tblPunches"></table></div>
+      </div>
+
+      <div id="viewDaily" class="view" style="display:none;">
+        <div class="tablewrap"><table id="tblDaily"></table></div>
+      </div>
+
+      <div id="viewSummary" class="view" style="display:none;">
+        <div class="tablewrap"><table id="tblSummary"></table></div>
+      </div>
+
+      <div id="viewEmp" class="view" style="display:none;">
+        <div class="hint noPrint">هذا التقرير يظهر عند اختيار موظف محدد من القائمة.</div>
+
+        <div class="kpi" id="empKpi" style="margin-top:12px; display:none;">
+          <div class="k"><div class="l">أيام الحضور</div><div class="n" id="eDaysP">0</div></div>
+          <div class="k"><div class="l">أيام الغياب</div><div class="n" id="eDaysA">0</div></div>
+          <div class="k"><div class="l">مجموع التأخير (دقيقة)</div><div class="n" id="eLate">0</div></div>
+          <div class="k"><div class="l">مجموع الإضافي (دقيقة)</div><div class="n" id="eOT">0</div></div>
+        </div>
+
+        <div class="kpi kpi3" id="empKpi2" style="margin-top:10px; display:none;">
+          <div class="k"><div class="l">ساعات العمل</div><div class="n" id="eWorkH">0</div></div>
+          <div class="k"><div class="l">أول بصمة</div><div class="n" id="eFirst">—</div></div>
+          <div class="k"><div class="l">آخر بصمة</div><div class="n" id="eLast">—</div></div>
+        </div>
+
+        <div class="row noPrint" style="margin-top:12px;">
+          <button id="btnExportEmpDaily" class="ghost">TSV Employee Daily</button>
+          <button id="btnExportEmpPunches" class="ghost">TSV Employee Punches</button>
+        </div>
+
+        <div class="hint"><b>الدوام اليومي للموظف (مع صف المجموع):</b></div>
+        <div class="tablewrap"><table id="tblEmpDaily"></table></div>
+
+        <div class="hint" style="margin-top:14px"><b>بصمات الموظف (بعد التنظيف):</b></div>
+        <div class="tablewrap"><table id="tblEmpPunches"></table></div>
+      </div>
+
+      <div class="hint noPrint">
+        <b>ملاحظة:</b> التصدير TSV (Tab) حتى تفتح الأعمدة صحيحة في Excel.
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
